@@ -44,7 +44,7 @@ void getNumBlocksAndThreads(int whichKernel, int n, int maxBlocks, int maxThread
     blocks = MIN(maxBlocks, blocks);
 }
 
-/* special type of reduction to account for floating point error 
+/* special type of reduction to account for floating point error
  * Look up Kahan summation
  */
 dtype reduce_cpu(dtype *data, int n) {
@@ -60,22 +60,54 @@ dtype reduce_cpu(dtype *data, int n) {
   return sum;
 }
 
+/*I need to implement this bad boy*/
+
 __global__ void
 kernel1(dtype *input, dtype *output, unsigned int n)
 {
+  __shared__  dtype scratch[MAX_THREADS];
 
+  unsigned int bid = gridDim.x * blockIdx.y + blockIdx.x;
+  unsigned int i = bid * blockDim.x + threadIdx.x;
+  unsigned int c = 0 ;
+
+  if(i < n) {
+    scratch[threadIdx.x] = input[i];
+  } else {
+    scratch[threadIdx.x] = 0;
+  }
+  __syncthreads ();
+
+  for(unsigned int s = 1; s < blockDim.x; s = s << 1) {
+
+    /*
+    I need to edit the if statement
+      if((threadIdx.x % (2 * s)) == 0) {
+      scratch[threadIdx.x] += scratch[threadIdx.x + s];
+    }
+    */
+    c = threadIdx.x * 2 * s;
+    if(c < blockDim.x){
+      scratch[c] += scratch[c + s];
+    }
+    __syncthreads ();
+  }
+
+  if(threadIdx.x == 0) {
+    output[bid] = scratch[0];
+  }
 }
 
 
 
-int 
+int
 main(int argc, char** argv)
 {
   int i;
 
   /* data structure */
   dtype *h_idata, h_odata, h_cpu;
-  dtype *d_idata, *d_odata;	
+  dtype *d_idata, *d_odata;
 
   /* timer */
   struct stopwatch_t* timer = NULL;
@@ -98,7 +130,7 @@ main(int argc, char** argv)
 
   /* naive kernel */
   whichKernel = 1;
-  getNumBlocksAndThreads (whichKernel, N, MAX_BLOCKS, MAX_THREADS, 
+  getNumBlocksAndThreads (whichKernel, N, MAX_BLOCKS, MAX_THREADS,
 			  blocks, threads);
 
   /* initialize timer */
@@ -115,16 +147,16 @@ main(int argc, char** argv)
   for(i = 0; i < N; i++) {
     h_idata[i] = drand48() / 100000;
   }
-  CUDA_CHECK_ERROR (cudaMemcpy (d_idata, h_idata, N * sizeof (dtype), 
+  CUDA_CHECK_ERROR (cudaMemcpy (d_idata, h_idata, N * sizeof (dtype),
 				cudaMemcpyHostToDevice));
 
-	
+
   /* ================================================== */
   /* GPU kernel */
   dim3 gb(16, ((blocks + 16 - 1) / 16), 1);
   dim3 tb(threads, 1, 1);
 
-  /* warm up */	
+  /* warm up */
   kernel1 <<<gb, tb>>> (d_idata, d_odata, N);
   cudaThreadSynchronize ();
 
@@ -136,7 +168,7 @@ main(int argc, char** argv)
   while(s > 1) {
     threads = 0;
     blocks = 0;
-    getNumBlocksAndThreads (whichKernel, s, MAX_BLOCKS, MAX_THREADS, 
+    getNumBlocksAndThreads (whichKernel, s, MAX_BLOCKS, MAX_THREADS,
 			    blocks, threads);
 
     dim3 gb(16, (blocks + 16 - 1) / 16, 1);
@@ -155,7 +187,7 @@ main(int argc, char** argv)
 
 
   /* copy result back from GPU */
-  CUDA_CHECK_ERROR (cudaMemcpy (&h_odata, d_odata, sizeof (dtype), 
+  CUDA_CHECK_ERROR (cudaMemcpy (&h_odata, d_odata, sizeof (dtype),
 				cudaMemcpyDeviceToHost));
   /* ================================================== */
 

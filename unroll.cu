@@ -57,24 +57,64 @@ dtype reduce_cpu(dtype *data, int n) {
     }
     return sum;
 }
-
+__device__ void warp_reduce(volatile dtype * scratch, int id,int n){
+  if (n > 64) {scratch[id] += scratch[id + 32];}
+  if (n > 32) {scratch[id] += scratch[id + 16];}
+  scratch[id] += scratch[id + 8];
+  scratch[id] += scratch[id + 4];
+  scratch[id] += scratch[id + 2];
+  scratch[id] += scratch[id + 1];
+}
 
 __global__ void
 kernel4(dtype *g_idata, dtype *g_odata, unsigned int n)
 {
+  __shared__  dtype scratch[MAX_THREADS];
+
+  unsigned int bid = gridDim.x * blockIdx.y + blockIdx.x;
+  unsigned int i = bid * blockDim.x + threadIdx.x;
+  unsigned int c = 0;
+
+  c = n/2;
+
+  if(i < c){
+    scratch[threadIdx.x] = g_idata[i] + g_idata[i + c];
+  }
+  else{
+    scratch[threadIdx.x] = 0.0;
+  }
+  __syncthreads ();
+
+
+  c = blockDim.x/2;
+  for(unsigned int s = c; s > 32 ; s = s >> 1){
+    if(threadIdx.x < s){
+      scratch[threadIdx.x] += scratch[threadIdx.x + s];
+    }
+    __syncthreads ();
+  }
+  // the last warp
+  // SIMD architecture, each instruction applies the same operation in parallel across many data elements
+
+  if(threadIdx.x < 32){
+    warp_reduce(scratch, threadIdx.x,n>>1);
+  }
+  if(threadIdx.x == 0) {
+    g_odata[bid] = scratch[0];
+  }
 }
 
 
 
 
-int 
+int
 main(int argc, char** argv)
 {
 	int i;
 
 	/* data structure */
 	dtype *h_idata, h_odata, h_cpu;
-	dtype *d_idata, *d_odata;	
+	dtype *d_idata, *d_odata;
 
 	/* timer */
 	struct stopwatch_t* timer = NULL;
@@ -97,7 +137,7 @@ main(int argc, char** argv)
 
 	/* naive kernel */
 	whichKernel = 4;
-	getNumBlocksAndThreads (whichKernel, N, MAX_BLOCKS, MAX_THREADS, 
+	getNumBlocksAndThreads (whichKernel, N, MAX_BLOCKS, MAX_THREADS,
 													blocks, threads);
 
 	/* initialize timer */
@@ -114,15 +154,15 @@ main(int argc, char** argv)
 	for(i = 0; i < N; i++) {
 		h_idata[i] = drand48() / 100000;
 	}
-	CUDA_CHECK_ERROR (cudaMemcpy (d_idata, h_idata, N * sizeof (dtype), 
+	CUDA_CHECK_ERROR (cudaMemcpy (d_idata, h_idata, N * sizeof (dtype),
 																cudaMemcpyHostToDevice));
-	
+
 	/* ================================================== */
 	/* GPU kernel */
 	dim3 gb(blocks, 1, 1);
 	dim3 tb(threads, 1, 1);
 
-	/* warm up */	
+	/* warm up */
 	kernel4 <<<gb, tb>>> (d_idata, d_odata, N);
 	cudaThreadSynchronize ();
 
@@ -134,7 +174,7 @@ main(int argc, char** argv)
 	while(s > 1) {
 		threads = 0;
 		blocks = 0;
-		getNumBlocksAndThreads (whichKernel, s, MAX_BLOCKS, MAX_THREADS, 
+		getNumBlocksAndThreads (whichKernel, s, MAX_BLOCKS, MAX_THREADS,
 														blocks, threads);
 
 		dim3 gb(blocks, 1, 1);
@@ -153,7 +193,7 @@ main(int argc, char** argv)
   fprintf (stdout, "Effective bandwidth: %.2lf GB/s\n", bw);
 
 	/* copy result back from GPU */
-	CUDA_CHECK_ERROR (cudaMemcpy (&h_odata, d_odata, sizeof (dtype), 
+	CUDA_CHECK_ERROR (cudaMemcpy (&h_odata, d_odata, sizeof (dtype),
 																cudaMemcpyDeviceToHost));
 	/* ================================================== */
 

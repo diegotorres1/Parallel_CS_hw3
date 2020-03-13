@@ -62,17 +62,38 @@ dtype reduce_cpu(dtype *data, int n) {
 __global__ void
 kernel3(dtype *g_idata, dtype *g_odata, unsigned int n)
 {
+  __shared__  dtype scratch[MAX_THREADS];
+
+  unsigned int bid = gridDim.x * blockIdx.y + blockIdx.x;
+  unsigned int i = bid * blockDim.x + threadIdx.x;
+  unsigned int c = 0;
+
+  c = n/2;
+  scratch[threadIdx.x] = g_idata[i] + g_idata[i + c];
+  __syncthreads ();
+
+  c = blockDim.x/2;
+  for(unsigned int s = c; s > 0 ; s = s >> 1){
+    if(threadIdx.x < s){
+      scratch[threadIdx.x] += scratch[threadIdx.x + s];
+    }
+    __syncthreads ();
+  }
+
+  if(threadIdx.x == 0) {
+    g_odata[bid] = scratch[0];
+  }
 }
 
 
-int 
+int
 main(int argc, char** argv)
 {
 	int i;
 
 	/* data structure */
 	dtype *h_idata, h_odata, h_cpu;
-	dtype *d_idata, *d_odata;	
+	dtype *d_idata, *d_odata;
 
 	/* timer */
 	struct stopwatch_t* timer = NULL;
@@ -95,7 +116,7 @@ main(int argc, char** argv)
 
 	/* naive kernel */
 	whichKernel = 3;
-	getNumBlocksAndThreads (whichKernel, N, MAX_BLOCKS, MAX_THREADS, 
+	getNumBlocksAndThreads (whichKernel, N, MAX_BLOCKS, MAX_THREADS,
 													blocks, threads);
 
 	/* initialize timer */
@@ -112,16 +133,16 @@ main(int argc, char** argv)
 	for(i = 0; i < N; i++) {
 		h_idata[i] = drand48() / 100000;
 	}
-	CUDA_CHECK_ERROR (cudaMemcpy (d_idata, h_idata, N * sizeof (dtype), 
+	CUDA_CHECK_ERROR (cudaMemcpy (d_idata, h_idata, N * sizeof (dtype),
 																cudaMemcpyHostToDevice));
 
-	
+
 	/* ================================================== */
 	/* GPU kernel */
 	dim3 gb(16, ((blocks + 16 - 1) / 16), 1);
 	dim3 tb(threads, 1, 1);
 
-	/* warm up */	
+	/* warm up */
 	kernel3 <<<gb, tb>>> (d_idata, d_odata, N);
 	cudaThreadSynchronize ();
 
@@ -133,7 +154,7 @@ main(int argc, char** argv)
 	while(s > 1) {
 		threads = 0;
 		blocks = 0;
-		getNumBlocksAndThreads (whichKernel, s, MAX_BLOCKS, MAX_THREADS, 
+		getNumBlocksAndThreads (whichKernel, s, MAX_BLOCKS, MAX_THREADS,
 														blocks, threads);
 
 		dim3 gb(16, (blocks + 16 - 1) / 16, 1);
@@ -152,7 +173,7 @@ main(int argc, char** argv)
   fprintf (stdout, "Effective bandwidth: %.2lf GB/s\n", bw);
 
 	/* copy result back from GPU */
-	CUDA_CHECK_ERROR (cudaMemcpy (&h_odata, d_odata, sizeof (dtype), 
+	CUDA_CHECK_ERROR (cudaMemcpy (&h_odata, d_odata, sizeof (dtype),
 																cudaMemcpyDeviceToHost));
 	/* ================================================== */
 
